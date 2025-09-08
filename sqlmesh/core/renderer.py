@@ -5,6 +5,11 @@ import typing as t
 from contextlib import contextmanager
 from functools import partial
 from pathlib import Path
+import re
+from sys import exc_info
+from traceback import walk_tb
+from jinja2 import UndefinedError
+from jinja2.runtime import Macro
 
 from sqlglot import exp, parse
 from sqlglot.errors import SqlglotError
@@ -247,9 +252,45 @@ class BaseExpressionRenderer:
             except ParsetimeAdapterCallError:
                 raise
             except Exception as ex:
-                raise ConfigError(
-                    f"Could not render or parse jinja at '{self._path}'.\n{ex}"
-                ) from ex
+                error_details: t.List[str] = []
+                if isinstance(ex, UndefinedError):
+                    try:
+                        _, _, exc_traceback = exc_info()
+                        for frame, _ in walk_tb(exc_traceback):
+                            if frame.f_code.co_name == "_invoke":
+                                macro = frame.f_locals.get("self")
+                                if isinstance(macro, Macro):
+                                    arguments = frame.f_locals.get("arguments", [])
+                                    arg_strs = [
+                                        f"'{a}'" if isinstance(a, str) else str(a)
+                                        for a in arguments
+                                    ]
+                                    error_details.append(
+                                        f"\nError when calling jinja macro: {macro.name}({', '.join(arg_strs)})\n"
+                                    )
+                                    for package in self._jinja_macro_registry.packages:
+                                        try:
+                                            if macro_info := self._jinja_macro_registry._get_macro(
+                                                macro.name, package
+                                            ):
+                                                error_details.append(
+                                                    "Macro definition:\n" + macro_info.definition
+                                                )
+                                                break
+                                        except:
+                                            pass
+                                    break
+                    except:
+                        # fall back to the generic error message if frame analysis fails
+                        pass
+
+                    if match := re.search(r"'(\w+)'", str(ex)):
+                        error_details.append(f"\nUndefined macro/variable: '{match.group(1)}'\n")
+
+                error_msg = f"Could not render or parse jinja at '{self._path}'."
+                error_msg += "\n" + "\n".join(error_details) if error_details else f"\n{ex}"
+
+                raise ConfigError(error_msg) from ex
 
         if this_model:
             render_kwargs["this_model"] = this_model
