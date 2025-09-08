@@ -587,6 +587,16 @@ class SnapshotTableInfo(PydanticModel, SnapshotInfoMixin, frozen=True):
         """Returns the name and version of the snapshot."""
         return SnapshotNameVersion(name=self.name, version=self.version)
 
+    @property
+    def id_and_version(self) -> SnapshotIdAndVersion:
+        return SnapshotIdAndVersion(
+            name=self.name,
+            version=self.version,
+            dev_version=self.dev_version,
+            identifier=self.identifier,
+            fingerprint=self.fingerprint,
+        )
+
 
 class SnapshotIdAndVersion(PydanticModel):
     """A stripped down version of a snapshot that is used in situations where we want to fetch the main fields of the snapshots table
@@ -1423,6 +1433,10 @@ class Snapshot(PydanticModel, SnapshotInfoMixin):
     def name_version(self) -> SnapshotNameVersion:
         """Returns the name and version of the snapshot."""
         return SnapshotNameVersion(name=self.name, version=self.version)
+
+    @property
+    def id_and_version(self) -> SnapshotIdAndVersion:
+        return self.table_info.id_and_version
 
     @property
     def disable_restatement(self) -> bool:
