@@ -2445,7 +2445,7 @@ def test_plan_min_intervals(tmp_path: Path):
       ),
       start '2020-01-01',
       cron '@daily'
-    );                        
+    );
 
     select @start_ds as start_ds, @end_ds as end_ds, @start_dt as start_dt, @end_dt as end_dt;
     """)
@@ -2458,9 +2458,9 @@ def test_plan_min_intervals(tmp_path: Path):
       ),
       start '2020-01-01',
       cron '@weekly'
-    );                        
+    );
 
-    select @start_ds as start_ds, @end_ds as end_ds, @start_dt as start_dt, @end_dt as end_dt;                        
+    select @start_ds as start_ds, @end_ds as end_ds, @start_dt as start_dt, @end_dt as end_dt;
     """)
 
     (tmp_path / "models" / "monthly_model.sql").write_text("""
@@ -2471,9 +2471,9 @@ def test_plan_min_intervals(tmp_path: Path):
       ),
       start '2020-01-01',
       cron '@monthly'
-    );                        
+    );
 
-    select @start_ds as start_ds, @end_ds as end_ds, @start_dt as start_dt, @end_dt as end_dt;                         
+    select @start_ds as start_ds, @end_ds as end_ds, @start_dt as start_dt, @end_dt as end_dt;
     """)
 
     (tmp_path / "models" / "ended_daily_model.sql").write_text("""
@@ -2485,9 +2485,9 @@ def test_plan_min_intervals(tmp_path: Path):
       start '2020-01-01',
       end '2020-01-18',
       cron '@daily'
-    );                        
+    );
 
-    select @start_ds as start_ds, @end_ds as end_ds, @start_dt as start_dt, @end_dt as end_dt;                 
+    select @start_ds as start_ds, @end_ds as end_ds, @start_dt as start_dt, @end_dt as end_dt;
     """)
 
     context.load()
@@ -2620,7 +2620,7 @@ def test_plan_min_intervals_adjusted_for_downstream(tmp_path: Path):
       ),
       start '2020-01-01',
       cron '@hourly'
-    );                        
+    );
 
     select @start_dt as start_dt, @end_dt as end_dt;
     """)
@@ -2629,11 +2629,11 @@ def test_plan_min_intervals_adjusted_for_downstream(tmp_path: Path):
     MODEL (
       name sqlmesh_example.two_hourly_model,
       kind INCREMENTAL_BY_TIME_RANGE (
-        time_column start_dt        
+        time_column start_dt
       ),
       start '2020-01-01',
       cron '0 */2 * * *'
-    );                        
+    );
 
     select start_dt, end_dt from sqlmesh_example.hourly_model where start_dt between @start_dt and @end_dt;
     """)
@@ -2642,11 +2642,11 @@ def test_plan_min_intervals_adjusted_for_downstream(tmp_path: Path):
     MODEL (
       name sqlmesh_example.unrelated_monthly_model,
       kind INCREMENTAL_BY_TIME_RANGE (
-        time_column start_dt        
+        time_column start_dt
       ),
       start '2020-01-01',
       cron '@monthly'
-    );                        
+    );
 
     select @start_dt as start_dt, @end_dt as end_dt;
     """)
@@ -2659,7 +2659,7 @@ def test_plan_min_intervals_adjusted_for_downstream(tmp_path: Path):
       ),
       start '2020-01-01',
       cron '@daily'
-    );                        
+    );
 
     select start_dt, end_dt from sqlmesh_example.hourly_model where start_dt between @start_dt and @end_dt;
     """)
@@ -2672,7 +2672,7 @@ def test_plan_min_intervals_adjusted_for_downstream(tmp_path: Path):
       ),
       start '2020-01-01',
       cron '@weekly'
-    );                        
+    );
 
     select start_dt, end_dt from sqlmesh_example.daily_model where start_dt between @start_dt and @end_dt;
     """)
@@ -2955,9 +2955,10 @@ SELECT * FROM test_db.uppercase_gateway_table;
     # Check that the column types are properly loaded (not UNKNOWN)
     external_model = gateway_specific_models[0]
     column_types = {name: str(dtype) for name, dtype in external_model.columns_to_types.items()}
-    assert column_types == {"id": "INT", "name": "TEXT"}, (
-        f"External model column types should not be UNKNOWN, got: {column_types}"
-    )
+    assert column_types == {
+        "id": "INT",
+        "name": "TEXT",
+    }, f"External model column types should not be UNKNOWN, got: {column_types}"
 
     # Test that when using a different case for the gateway parameter, we get the same results
     context_mixed_case = Context(
@@ -3065,3 +3066,46 @@ def test_plan_no_start_configured():
         match=r"Model '.*xvg.*': Start date / time .* can't be greater than end date / time .*\.\nSet the `start` attribute in your project config model defaults to avoid this issue",
     ):
         context.plan("dev", execution_time="1999-01-05")
+
+
+def test_grants_through_plan_apply(sushi_context, mocker):
+    from sqlmesh.core.engine_adapter.duckdb import DuckDBEngineAdapter
+    from sqlmesh.core.model.meta import GrantsTargetLayer
+
+    model = sushi_context.get_model("sushi.waiter_revenue_by_day")
+    mocker.patch.object(DuckDBEngineAdapter, "SUPPORTS_GRANTS", True)
+    sync_grants_mock = mocker.patch.object(DuckDBEngineAdapter, "sync_grants_config")
+
+    model_with_grants = model.copy(
+        update={
+            "grants": {"select": ["analyst", "reporter"]},
+            "grants_target_layer": GrantsTargetLayer.ALL,
+            "stamp": "add initial grants",
+        }
+    )
+    sushi_context.upsert_model(model_with_grants)
+
+    sushi_context.plan("dev", no_prompts=True, auto_apply=True)
+
+    assert sync_grants_mock.call_count == 2
+    assert all(
+        call[0][1] == {"select": ["analyst", "reporter"]}
+        for call in sync_grants_mock.call_args_list
+    )
+
+    sync_grants_mock.reset_mock()
+
+    model_updated = model_with_grants.copy(
+        update={
+            "query": parse_one(model.query.sql() + " LIMIT 1000"),
+            "grants": {"select": ["analyst", "reporter", "manager"], "insert": ["etl_user"]},
+            "stamp": "update model and grants",
+        }
+    )
+    sushi_context.upsert_model(model_updated)
+
+    sushi_context.plan("dev", no_prompts=True, auto_apply=True)
+
+    assert sync_grants_mock.call_count == 2
+    expected_grants = {"select": ["analyst", "reporter", "manager"], "insert": ["etl_user"]}
+    assert all(call[0][1] == expected_grants for call in sync_grants_mock.call_args_list)
